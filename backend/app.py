@@ -6,14 +6,24 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional, Union
 import os
+import traceback
+import logging
 
 from config import config
 from rag_system import RAGSystem
 
-# Initialize FastAPI app
-app = FastAPI(title="Course Materials RAG System", root_path="")
+# Configure logging for debugging
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
+
+# Initialize FastAPI app with debug mode
+app = FastAPI(
+    title="Course Materials RAG System", 
+    root_path="",
+    debug=True
+)
 
 # Add trusted host middleware for proxy
 app.add_middleware(
@@ -40,10 +50,15 @@ class QueryRequest(BaseModel):
     query: str
     session_id: Optional[str] = None
 
+class SourceItem(BaseModel):
+    """Model for individual source items that can be either text or clickable links"""
+    text: str
+    url: Optional[str] = None
+
 class QueryResponse(BaseModel):
     """Response model for course queries"""
     answer: str
-    sources: List[str]
+    sources: List[Union[str, SourceItem]]  # Support both legacy strings and new objects
     session_id: str
 
 class CourseStats(BaseModel):
@@ -57,6 +72,8 @@ class CourseStats(BaseModel):
 async def query_documents(request: QueryRequest):
     """Process a query and return response with sources"""
     try:
+        logger.info(f"Processing query: {request.query}")
+        
         # Create session if not provided
         session_id = request.session_id
         if not session_id:
@@ -65,12 +82,16 @@ async def query_documents(request: QueryRequest):
         # Process query using RAG system
         answer, sources = rag_system.query(request.query, session_id)
         
+        logger.info(f"Query processed successfully. Sources type: {type(sources)}, Sources: {sources}")
+        
         return QueryResponse(
             answer=answer,
             sources=sources,
             session_id=session_id
         )
     except Exception as e:
+        logger.error(f"Error processing query: {str(e)}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/courses", response_model=CourseStats)
