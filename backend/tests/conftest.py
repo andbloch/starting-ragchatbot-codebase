@@ -1,9 +1,12 @@
 import os
 import sys
+import tempfile
+import shutil
 from typing import Any, Dict, List, Optional
 from unittest.mock import MagicMock, Mock
 
 import pytest
+from fastapi.testclient import TestClient
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -13,6 +16,7 @@ from models import Course, CourseChunk, Lesson
 from rag_system import RAGSystem
 from search_tools import CourseOutlineTool, CourseSearchTool, ToolManager
 from vector_store import SearchResults, VectorStore
+from config import Config
 
 
 @pytest.fixture
@@ -213,3 +217,127 @@ def sample_chunks():
             chunk_index=1,
         ),
     ]
+
+
+@pytest.fixture
+def test_config():
+    """Create a test configuration with temporary directories"""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        config = Mock(spec=Config)
+        config.CHUNK_SIZE = 1000
+        config.CHUNK_OVERLAP = 200
+        config.CHROMA_PATH = os.path.join(temp_dir, "test_chroma_db")
+        config.EMBEDDING_MODEL = "all-MiniLM-L6-v2"
+        config.MAX_RESULTS = 5
+        config.ANTHROPIC_API_KEY = "test_api_key"
+        config.ANTHROPIC_MODEL = "claude-3-sonnet-20240229"
+        config.MAX_HISTORY = 10
+        yield config
+
+
+@pytest.fixture
+def mock_rag_system(test_config, mock_vector_store, mock_ai_generator):
+    """Create a mock RAG system for API testing"""
+    mock_rag = Mock(spec=RAGSystem)
+    
+    # Mock session manager
+    mock_session_manager = Mock()
+    mock_session_manager.create_session.return_value = "test_session_123"
+    mock_rag.session_manager = mock_session_manager
+    
+    # Mock query method
+    def mock_query(query: str, session_id: str = None):
+        if query == "test error":
+            return "I apologize, but I encountered an error processing your query.", []
+        elif query == "python basics":
+            return "Python is a programming language used for many applications.", [
+                {"text": "Python Programming - Lesson 1", "url": "https://example.com/python/lesson1"}
+            ]
+        else:
+            return "Test response for your query.", [
+                {"text": "Test Source", "url": None}
+            ]
+    
+    mock_rag.query.side_effect = mock_query
+    
+    # Mock course analytics
+    mock_rag.get_course_analytics.return_value = {
+        "total_courses": 2,
+        "course_titles": ["Introduction to Python", "Model Context Protocol"]
+    }
+    
+    return mock_rag
+
+
+@pytest.fixture
+def test_app(mock_rag_system):
+    """Create a test FastAPI app with mocked dependencies"""
+    from fastapi import FastAPI
+    from fastapi.middleware.cors import CORSMiddleware
+    from pydantic import BaseModel
+    from typing import List, Optional, Union
+    
+    # Create test app without static file mounting to avoid dependency issues
+    app = FastAPI(title="Course Materials RAG System Test", debug=True)
+    
+    # Add CORS middleware
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+    
+    # Pydantic models (same as main app)
+    class QueryRequest(BaseModel):
+        query: str
+        session_id: Optional[str] = None
+
+    class SourceItem(BaseModel):
+        text: str
+        url: Optional[str] = None
+
+    class QueryResponse(BaseModel):
+        answer: str
+        sources: List[Union[str, SourceItem]]
+        session_id: str
+
+    class CourseStats(BaseModel):
+        total_courses: int
+        course_titles: List[str]
+    
+    # API endpoints with mocked RAG system
+    @app.post("/api/query", response_model=QueryResponse)
+    async def query_documents(request: QueryRequest):
+        session_id = request.session_id
+        if not session_id:
+            session_id = mock_rag_system.session_manager.create_session()
+        
+        answer, sources = mock_rag_system.query(request.query, session_id)
+        
+        return QueryResponse(
+            answer=answer,
+            sources=sources,
+            session_id=session_id
+        )
+    
+    @app.get("/api/courses", response_model=CourseStats)
+    async def get_course_stats():
+        analytics = mock_rag_system.get_course_analytics()
+        return CourseStats(
+            total_courses=analytics["total_courses"],
+            course_titles=analytics["course_titles"]
+        )
+    
+    @app.get("/")
+    async def root():
+        return {"message": "Course Materials RAG System"}
+    
+    return app
+
+
+@pytest.fixture
+def test_client(test_app):
+    """Create a test client for API testing"""
+    return TestClient(test_app)
