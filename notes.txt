@@ -1,0 +1,83 @@
+Commands
+
+/clear  To clear context of current conversation. It makes sense to do that when you switch to implementing another feature.
+/mcp    To see currently configured/attached MCP servers
+
+
+# Enable plan mode
+Shift + Tab, Shift + Tab
+
+# Extended Thinking
+
+Enable plan mode (2x Shift + Tab) and write "Think." or "Think a lot." at the end of your query.
+```
+{prompt}
+
+Think.
+```
+
+There are several levels of thinking: 
+
+"think" < "think hard" < "think harder" < "ultrathink." 
+
+Each level allocates more thinking budget for Claude.
+
+# Use of subagents
+
+You can explicitly ask Claude Code to use subagents to brainstorm ideas or to investigate 
+multiple aspects of a question or a problem you want to solve. These built-in agents are 
+of general purpose.
+
+```
+{prompt}
+
+Aspects:
+- First aspect
+- Second aspect
+- ...
+
+Use n parallel subagents to investigate ach of the aspects possible plans. Do not implement any code.
+```
+
+You can also create your customized specialized subagents. Each subagent has its own 
+context window, and you can define a custom system prompt and specific tools for each 
+subagent. This part is not covered in this course, but you can check the details in the 
+documentation here: https://docs.anthropic.com/en/docs/claude-code/sub-agents.
+
+## Example:Performing Complex Refactors
+
+Structure your query as follows
+
+```
+{Short description of task tagging most important files}
+
+Current behaviour:
+{- Describe/Enumerate steps of current behaviour}
+
+Desired behaviour:
+{- Describe/Enumerate steps of desired behaviour}
+
+Example flow:
+{X. Enumerate steps of example flow}
+
+Requirements:
+{- List requirements to implementation}
+
+Notes:
+{- List some concrete details for implementation}
+
+Use two parallel subagents to brainstorm possible plans. Do not implement any code.
+```
+
+
+
+Currently the RAG chatbot has a low test coverage. I need you to:
+1. Write tests to evaluate the outputs of the execute method of the CourseSearchTool in @backend/search_tools.py 
+2. Write tests to evaluate if @backend/ai_generator.py correctly calls for the CourseSearchTool 
+3. Write tests to evaluate how the RAG system is handling the content-query related questions. 
+
+Save the tests in a tests folder within @backend. 
+Run those tests against the current system to identify which components are failing. 
+Propose fixes based on what the tests reveal is broken.
+
+Think a lot.
