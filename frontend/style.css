@@ -814,18 +814,23 @@ details[open] .suggested-header::before {
 .theme-toggle .sun-icon,
 .theme-toggle .moon-icon {
     position: absolute;
-    transition: all 0.3s ease;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    transition: opacity 0.3s ease, transform 0.3s ease;
     color: var(--text-primary);
 }
 
+/* Dark theme (default) - show sun icon, hide moon icon */
 .theme-toggle .sun-icon {
     opacity: 1;
-    transform: rotate(0deg) scale(1);
+    transform: translate(-50%, -50%) rotate(0deg) scale(1);
 }
 
 .theme-toggle .moon-icon {
     opacity: 0;
-    transform: rotate(180deg) scale(0.8);
+    transform: translate(-50%, -50%) rotate(180deg) scale(0.8);
+    pointer-events: none;
 }
 
 /* Light Theme Variables */
@@ -846,15 +851,16 @@ details[open] .suggested-header::before {
     --welcome-border: #2563eb;
 }
 
-/* Light theme icon states */
+/* Light theme icon states - show moon icon, hide sun icon */
 [data-theme="light"] .theme-toggle .sun-icon {
     opacity: 0;
-    transform: rotate(-180deg) scale(0.8);
+    transform: translate(-50%, -50%) rotate(-180deg) scale(0.8);
+    pointer-events: none;
 }
 
 [data-theme="light"] .theme-toggle .moon-icon {
     opacity: 1;
-    transform: rotate(0deg) scale(1);
+    transform: translate(-50%, -50%) rotate(0deg) scale(1);
 }
 
 /* Smooth transitions for theme switching */
