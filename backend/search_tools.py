@@ -71,10 +71,14 @@ class CourseSearchTool(Tool):
         
         # Handle errors
         if results.error:
+            # Clear sources for error results
+            self.last_sources = []
             return results.error
         
         # Handle empty results
         if results.is_empty():
+            # Clear sources for empty results
+            self.last_sources = []
             filter_info = ""
             if course_name:
                 filter_info += f" in course '{course_name}'"

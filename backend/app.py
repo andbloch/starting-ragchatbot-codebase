@@ -79,7 +79,7 @@ async def query_documents(request: QueryRequest):
         if not session_id:
             session_id = rag_system.session_manager.create_session()
         
-        # Process query using RAG system
+        # Process query using RAG system (handles API errors gracefully)
         answer, sources = rag_system.query(request.query, session_id)
         
         logger.info(f"Query processed successfully. Sources type: {type(sources)}, Sources: {sources}")
@@ -90,9 +90,17 @@ async def query_documents(request: QueryRequest):
             session_id=session_id
         )
     except Exception as e:
-        logger.error(f"Error processing query: {str(e)}")
+        # Only catch truly unexpected errors (RAG system handles API errors gracefully)
+        # This should rarely be reached as RAG system has comprehensive error handling
+        logger.error(f"Unexpected error in FastAPI layer: {str(e)}")
         logger.error(f"Traceback: {traceback.format_exc()}")
-        raise HTTPException(status_code=500, detail=str(e))
+        
+        # Return a graceful error response instead of HTTP 500
+        return QueryResponse(
+            answer="I encountered an unexpected system error. Please try again, and if the problem persists, please contact support.",
+            sources=[],
+            session_id=session_id or "error_session"
+        )
 
 @app.get("/api/courses", response_model=CourseStats)
 async def get_course_stats():

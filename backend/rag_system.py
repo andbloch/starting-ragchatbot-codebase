@@ -6,6 +6,8 @@ from ai_generator import AIGenerator
 from session_manager import SessionManager
 from search_tools import ToolManager, CourseSearchTool, CourseOutlineTool
 from models import Course, Lesson, CourseChunk
+from anthropic import APIError, RateLimitError
+from anthropic._exceptions import OverloadedError
 
 class RAGSystem:
     """Main orchestrator for the Retrieval-Augmented Generation system"""
@@ -16,7 +18,13 @@ class RAGSystem:
         # Initialize core components
         self.document_processor = DocumentProcessor(config.CHUNK_SIZE, config.CHUNK_OVERLAP)
         self.vector_store = VectorStore(config.CHROMA_PATH, config.EMBEDDING_MODEL, config.MAX_RESULTS)
-        self.ai_generator = AIGenerator(config.ANTHROPIC_API_KEY, config.ANTHROPIC_MODEL)
+        self.ai_generator = AIGenerator(
+            config.ANTHROPIC_API_KEY, 
+            config.ANTHROPIC_MODEL,
+            config.MAX_RETRIES,
+            config.RETRY_DELAY,
+            config.MAX_RETRY_DELAY
+        )
         self.session_manager = SessionManager(config.MAX_HISTORY)
         
         # Initialize search tools
@@ -120,13 +128,39 @@ class RAGSystem:
         if session_id:
             history = self.session_manager.get_conversation_history(session_id)
         
-        # Generate response using AI with tools
-        response = self.ai_generator.generate_response(
-            query=prompt,
-            conversation_history=history,
-            tools=self.tool_manager.get_tool_definitions(),
-            tool_manager=self.tool_manager
-        )
+        # Generate response using AI with tools - handle API failures gracefully
+        try:
+            response = self.ai_generator.generate_response(
+                query=prompt,
+                conversation_history=history,
+                tools=self.tool_manager.get_tool_definitions(),
+                tool_manager=self.tool_manager
+            )
+        except (OverloadedError, RateLimitError) as e:
+            # Handle API overload/rate limit errors gracefully
+            error_response = (
+                "I'm experiencing high demand right now and the AI service is temporarily overloaded. "
+                "Please try your question again in a few moments. If the issue persists, the service "
+                "may be experiencing temporary capacity constraints."
+            )
+            print(f"API overload/rate limit error handled gracefully: {e}")
+            return error_response, []
+        except APIError as e:
+            # Handle other API errors (authentication, etc.)
+            error_response = (
+                "I'm sorry, but I'm having trouble connecting to the AI service right now. "
+                "Please check your configuration or try again later."
+            )
+            print(f"API error handled gracefully: {e}")
+            return error_response, []
+        except Exception as e:
+            # Handle any other unexpected errors
+            error_response = (
+                "I encountered an unexpected error while processing your question. "
+                "Please try again, and if the problem persists, please check the system logs."
+            )
+            print(f"Unexpected error in RAG system: {e}")
+            return error_response, []
         
         # Get sources from the search tool
         sources = self.tool_manager.get_last_sources()

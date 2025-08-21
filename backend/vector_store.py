@@ -89,6 +89,10 @@ class VectorStore:
         # Use provided limit or fall back to configured max_results
         search_limit = limit if limit is not None else self.max_results
         
+        # Validate search limit
+        if search_limit < 1:
+            return SearchResults.empty(f"Invalid search limit: {search_limit}. Must be >= 1")
+        
         try:
             results = self.course_content.query(
                 query_texts=[query],

@@ -1,5 +1,9 @@
 import anthropic
+import time
+import random
 from typing import List, Optional, Dict, Any
+from anthropic import APIError, RateLimitError
+from anthropic._exceptions import OverloadedError
 
 class AIGenerator:
     """Handles interactions with Anthropic's Claude API for generating responses"""
@@ -43,9 +47,12 @@ All responses must be:
 Provide only the direct answer to what was asked.
 """
     
-    def __init__(self, api_key: str, model: str):
+    def __init__(self, api_key: str, model: str, max_retries: int = 3, retry_delay: float = 1.0, max_retry_delay: float = 60.0):
         self.client = anthropic.Anthropic(api_key=api_key)
         self.model = model
+        self.max_retries = max_retries
+        self.retry_delay = retry_delay
+        self.max_retry_delay = max_retry_delay
         
         # Pre-build base API parameters
         self.base_params = {
@@ -90,12 +97,16 @@ Provide only the direct answer to what was asked.
             api_params["tools"] = tools
             api_params["tool_choice"] = {"type": "auto"}
         
-        # Get response from Claude
-        response = self.client.messages.create(**api_params)
+        # Get response from Claude with retry logic
+        response = self._make_api_call_with_retry(api_params)
         
         # Handle tool execution if needed
-        if response.stop_reason == "tool_use" and tool_manager:
-            return self._handle_tool_execution(response, api_params, tool_manager)
+        if response.stop_reason == "tool_use":
+            if tool_manager:
+                return self._handle_tool_execution(response, api_params, tool_manager)
+            else:
+                # No tool manager provided - return text indicating tools were requested but unavailable
+                return "Tools were requested but no tool manager was provided."
         
         # Return direct response
         return response.content[0].text
@@ -144,6 +155,56 @@ Provide only the direct answer to what was asked.
             "system": base_params["system"]
         }
         
-        # Get final response
-        final_response = self.client.messages.create(**final_params)
+        # Get final response with retry logic
+        final_response = self._make_api_call_with_retry(final_params)
         return final_response.content[0].text
+    
+    def _make_api_call_with_retry(self, api_params: Dict[str, Any]):
+        """
+        Make API call with exponential backoff retry logic.
+        
+        Args:
+            api_params: Parameters for the API call
+            
+        Returns:
+            Response from the API
+            
+        Raises:
+            APIError: After all retries are exhausted
+        """
+        last_exception = None
+        
+        for attempt in range(self.max_retries + 1):
+            try:
+                return self.client.messages.create(**api_params)
+                
+            except (OverloadedError, RateLimitError) as e:
+                last_exception = e
+                if attempt == self.max_retries:
+                    # Final attempt failed
+                    print(f"API call failed after {self.max_retries + 1} attempts: {e}")
+                    raise
+                
+                # Calculate delay with exponential backoff and jitter
+                delay = min(
+                    self.retry_delay * (2 ** attempt) + random.uniform(0, 1),
+                    self.max_retry_delay
+                )
+                
+                print(f"API call failed (attempt {attempt + 1}/{self.max_retries + 1}): {e}")
+                print(f"Retrying in {delay:.2f} seconds...")
+                time.sleep(delay)
+                
+            except APIError as e:
+                # For other API errors, don't retry
+                print(f"Non-retryable API error: {e}")
+                raise
+                
+            except Exception as e:
+                # For unexpected errors, don't retry
+                print(f"Unexpected error in API call: {e}")
+                raise
+        
+        # This shouldn't be reached, but just in case
+        if last_exception:
+            raise last_exception
