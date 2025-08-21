@@ -1,67 +1,76 @@
-import pytest
-import sys
 import os
-from unittest.mock import Mock, MagicMock
-from typing import List, Dict, Any, Optional
+import sys
+from typing import Any, Dict, List, Optional
+from unittest.mock import MagicMock, Mock
+
+import pytest
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from models import Course, Lesson, CourseChunk
-from vector_store import VectorStore, SearchResults
-from search_tools import CourseSearchTool, CourseOutlineTool, ToolManager
 from ai_generator import AIGenerator
+from models import Course, CourseChunk, Lesson
 from rag_system import RAGSystem
+from search_tools import CourseOutlineTool, CourseSearchTool, ToolManager
+from vector_store import SearchResults, VectorStore
 
 
 @pytest.fixture
 def mock_vector_store():
     """Create a mock vector store with test data"""
     mock_store = Mock(spec=VectorStore)
-    
+
     # Mock search results for testing
-    def mock_search(query: str, course_name: Optional[str] = None, lesson_number: Optional[int] = None):
+    def mock_search(
+        query: str,
+        course_name: Optional[str] = None,
+        lesson_number: Optional[int] = None,
+    ):
         # Simulate different search scenarios
         if query == "test_empty":
             return SearchResults(documents=[], metadata=[], distances=[])
         elif query == "test_error":
-            return SearchResults(documents=[], metadata=[], distances=[], error="Search failed")
+            return SearchResults(
+                documents=[], metadata=[], distances=[], error="Search failed"
+            )
         elif query == "python basics":
             return SearchResults(
                 documents=["Python is a programming language", "Variables in Python"],
                 metadata=[
                     {"course_title": "Introduction to Python", "lesson_number": 1},
-                    {"course_title": "Introduction to Python", "lesson_number": 2}
+                    {"course_title": "Introduction to Python", "lesson_number": 2},
                 ],
-                distances=[0.1, 0.2]
+                distances=[0.1, 0.2],
             )
         elif course_name == "MCP" and query == "servers":
             return SearchResults(
                 documents=["MCP servers handle protocol connections"],
-                metadata=[{"course_title": "Model Context Protocol", "lesson_number": 3}],
-                distances=[0.15]
+                metadata=[
+                    {"course_title": "Model Context Protocol", "lesson_number": 3}
+                ],
+                distances=[0.15],
             )
         else:
             # Default case - check if this is being overridden by the specific test
             return SearchResults(
                 documents=["Default test content"],
                 metadata=[{"course_title": "Test Course", "lesson_number": 1}],
-                distances=[0.3]
+                distances=[0.3],
             )
-    
+
     mock_store.search.side_effect = mock_search
-    
+
     # Mock course resolution
     def mock_resolve_course_name(course_name: str):
         mapping = {
             "MCP": "Model Context Protocol",
             "Python": "Introduction to Python",
-            "nonexistent": None
+            "nonexistent": None,
         }
         return mapping.get(course_name, "Test Course")
-    
+
     mock_store._resolve_course_name.side_effect = mock_resolve_course_name
-    
+
     # Mock lesson link retrieval
     def mock_get_lesson_link(course_title: str, lesson_number: int):
         if course_title == "Introduction to Python" and lesson_number == 1:
@@ -69,9 +78,9 @@ def mock_vector_store():
         elif course_title == "Model Context Protocol" and lesson_number == 3:
             return "https://example.com/mcp/lesson3"
         return None
-    
+
     mock_store.get_lesson_link.side_effect = mock_get_lesson_link
-    
+
     # Mock course metadata
     mock_store.get_all_courses_metadata.return_value = [
         {
@@ -79,8 +88,8 @@ def mock_vector_store():
             "course_link": "https://example.com/python",
             "lessons": [
                 {"lesson_number": 1, "lesson_title": "Python Basics"},
-                {"lesson_number": 2, "lesson_title": "Variables and Data Types"}
-            ]
+                {"lesson_number": 2, "lesson_title": "Variables and Data Types"},
+            ],
         },
         {
             "title": "Model Context Protocol",
@@ -88,11 +97,11 @@ def mock_vector_store():
             "lessons": [
                 {"lesson_number": 1, "lesson_title": "Introduction to MCP"},
                 {"lesson_number": 2, "lesson_title": "MCP Architecture"},
-                {"lesson_number": 3, "lesson_title": "MCP Servers"}
-            ]
-        }
+                {"lesson_number": 3, "lesson_title": "MCP Servers"},
+            ],
+        },
     ]
-    
+
     return mock_store
 
 
@@ -112,13 +121,13 @@ def course_outline_tool(mock_vector_store):
 def mock_anthropic_client():
     """Create a mock Anthropic client"""
     mock_client = Mock()
-    
+
     # Mock responses for different scenarios
     def mock_create(**kwargs):
         mock_response = Mock()
-        
+
         # Check if tools are provided
-        if 'tools' in kwargs:
+        if "tools" in kwargs:
             # Simulate tool use response
             mock_response.stop_reason = "tool_use"
             mock_content_block = Mock()
@@ -131,11 +140,13 @@ def mock_anthropic_client():
             # Simulate regular text response
             mock_response.stop_reason = "end_turn"
             mock_text_block = Mock()
-            mock_text_block.text = "This is the AI response based on the search results."
+            mock_text_block.text = (
+                "This is the AI response based on the search results."
+            )
             mock_response.content = [mock_text_block]
-        
+
         return mock_response
-    
+
     mock_client.messages.create.side_effect = mock_create
     return mock_client
 
@@ -171,9 +182,17 @@ def sample_course():
         course_link="https://example.com/python",
         instructor="John Doe",
         lessons=[
-            Lesson(lesson_number=1, title="Python Basics", lesson_link="https://example.com/python/lesson1"),
-            Lesson(lesson_number=2, title="Variables and Data Types", lesson_link="https://example.com/python/lesson2")
-        ]
+            Lesson(
+                lesson_number=1,
+                title="Python Basics",
+                lesson_link="https://example.com/python/lesson1",
+            ),
+            Lesson(
+                lesson_number=2,
+                title="Variables and Data Types",
+                lesson_link="https://example.com/python/lesson2",
+            ),
+        ],
     )
 
 
@@ -185,12 +204,12 @@ def sample_chunks():
             content="Python is a high-level programming language",
             course_title="Introduction to Python",
             lesson_number=1,
-            chunk_index=0
+            chunk_index=0,
         ),
         CourseChunk(
             content="Variables store data values in Python",
             course_title="Introduction to Python",
             lesson_number=2,
-            chunk_index=1
-        )
+            chunk_index=1,
+        ),
     ]

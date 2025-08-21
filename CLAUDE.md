@@ -9,6 +9,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Manual start**: `cd backend && uv run uvicorn app:app --reload --port 8000`
 - **Install dependencies**: `uv sync`
 
+### Code Quality
+- **Format code**: `./scripts/format.sh` (Black + isort)
+- **Lint code**: `./scripts/lint.sh` (flake8, mypy, format checks)
+- **Full quality check**: `./scripts/quality.sh` (format + lint)
+
 ### Environment Setup
 - Create `.env` file in root with `ANTHROPIC_API_KEY=your_key_here`
 - Requires Python 3.13+, uv package manager, and Anthropic API key
