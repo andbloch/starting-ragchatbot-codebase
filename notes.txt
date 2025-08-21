@@ -1,5 +1,6 @@
 Commands
 
+/cost.  Monitor cost of current session.
 /clear  To clear context of current conversation. It makes sense to do that when you switch to implementing another feature.
 /mcp    To see currently configured/attached MCP servers
 
