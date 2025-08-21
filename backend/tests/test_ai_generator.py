@@ -32,13 +32,39 @@ class TestAIGenerator:
         # Mock the tool manager's execute_tool method
         tool_manager.execute_tool = Mock(return_value="Search results here")
         
+        # Configure mock to use tool once, then provide final response
+        call_count = 0
+        def mock_create(**kwargs):
+            nonlocal call_count
+            call_count += 1
+            mock_response = Mock()
+            
+            if call_count == 1:
+                # First round - use tool
+                mock_response.stop_reason = "tool_use"
+                mock_content_block = Mock()
+                mock_content_block.type = "tool_use"
+                mock_content_block.name = "search_course_content"
+                mock_content_block.input = {"query": "test"}
+                mock_content_block.id = "tool_use_1"
+                mock_response.content = [mock_content_block]
+            else:
+                # Second round - final response without tools
+                mock_response.stop_reason = "end_turn"
+                mock_text_block = Mock()
+                mock_text_block.text = "Here's the answer based on the search."
+                mock_response.content = [mock_text_block]
+            return mock_response
+        
+        mock_ai_generator.client.messages.create.side_effect = mock_create
+        
         response = mock_ai_generator.generate_response(
             query="What is Python?",
             tools=tool_manager.get_tool_definitions(),
             tool_manager=tool_manager
         )
         
-        # Since tool execution happened, verify it was called twice (initial + follow-up)
+        # Verify API calls were made (tool use + final response)
         assert mock_ai_generator.client.messages.create.call_count == 2
         
         # Verify the first API call (initial) had tools
@@ -46,8 +72,11 @@ class TestAIGenerator:
         assert "tools" in first_call_args
         assert first_call_args["tool_choice"] == {"type": "auto"}
         
-        # Verify tool was executed
+        # Verify tool was executed once
         tool_manager.execute_tool.assert_called_once()
+        
+        # Verify final response
+        assert response == "Here's the answer based on the search."
 
     def test_handle_tool_execution_flow(self, mock_ai_generator, course_search_tool):
         """Test the complete tool execution flow"""
@@ -187,7 +216,7 @@ class TestAIGenerator:
         assert "Course Outline" in system_prompt
         assert "search_course_content" in system_prompt
         assert "get_course_outline" in system_prompt
-        assert "One tool call per query maximum" in system_prompt
+        assert "You may make multiple tool calls across up to 2 rounds" in system_prompt
         assert "No meta-commentary" in system_prompt
 
     def test_base_parameters_configuration(self):
@@ -372,9 +401,9 @@ class TestAIGenerator:
         
         ai_gen.client.messages.create = Mock(side_effect=mock_create)
         
-        # Should raise after exhausting retries
-        with pytest.raises(OverloadedError, match="Persistent overload"):
-            ai_gen.generate_response("Test query")
+        # Should return error message after exhausting retries
+        result = ai_gen.generate_response("Test query")
+        assert "I encountered an error while processing your request" in result
         
         assert ai_gen.client.messages.create.call_count == 2  # max_retries + 1
 
@@ -389,9 +418,9 @@ class TestAIGenerator:
         
         ai_gen.client.messages.create = Mock(side_effect=mock_create)
         
-        # Should fail immediately without retries
-        with pytest.raises(APIError, match="Authentication failed"):
-            ai_gen.generate_response("Test query")
+        # Should return error message immediately without retries
+        result = ai_gen.generate_response("Test query")
+        assert "I encountered an error while processing your request" in result
         
         assert ai_gen.client.messages.create.call_count == 1  # No retries
 
@@ -444,3 +473,296 @@ class TestAIGenerator:
         
         assert result == "Final response"
         assert ai_gen.client.messages.create.call_count == 3  # First + retry on second
+
+    def test_sequential_tool_calling_two_rounds(self, mock_ai_generator, course_search_tool, course_outline_tool):
+        """Test sequential tool calling across 2 rounds"""
+        tool_manager = ToolManager()
+        tool_manager.register_tool(course_search_tool)
+        tool_manager.register_tool(course_outline_tool)
+        
+        # Mock tool executions
+        def mock_execute_tool(tool_name, **kwargs):
+            if tool_name == "get_course_outline":
+                return "Course X has Lesson 4: Python Basics"
+            elif tool_name == "search_course_content":
+                return "Found Course Y that covers Python Basics"
+            return "Unknown tool result"
+        
+        tool_manager.execute_tool = Mock(side_effect=mock_execute_tool)
+        
+        # Configure mock to simulate 2 rounds of tool calls then final response
+        call_count = 0
+        def mock_create(**kwargs):
+            nonlocal call_count
+            call_count += 1
+            mock_response = Mock()
+            
+            if call_count == 1:
+                # First round - get course outline
+                mock_response.stop_reason = "tool_use"
+                mock_content_block = Mock()
+                mock_content_block.type = "tool_use"
+                mock_content_block.name = "get_course_outline"
+                mock_content_block.input = {"course_title": "Course X"}
+                mock_content_block.id = "tool_use_1"
+                mock_response.content = [mock_content_block]
+            elif call_count == 2:
+                # Second round - search for similar course
+                mock_response.stop_reason = "tool_use"
+                mock_content_block = Mock()
+                mock_content_block.type = "tool_use"
+                mock_content_block.name = "search_course_content"
+                mock_content_block.input = {"query": "Python Basics"}
+                mock_content_block.id = "tool_use_2"
+                mock_response.content = [mock_content_block]
+            else:
+                # Final response after 2 rounds
+                mock_response.stop_reason = "end_turn"
+                mock_text_block = Mock()
+                mock_text_block.text = "Course Y covers the same topic as Lesson 4 of Course X."
+                mock_response.content = [mock_text_block]
+            return mock_response
+        
+        mock_ai_generator.client.messages.create.side_effect = mock_create
+        
+        response = mock_ai_generator.generate_response(
+            query="Find a course that discusses the same topic as lesson 4 of Course X",
+            tools=tool_manager.get_tool_definitions(),
+            tool_manager=tool_manager
+        )
+        
+        # Verify both tools were executed
+        assert tool_manager.execute_tool.call_count == 2
+        tool_manager.execute_tool.assert_has_calls([
+            call("get_course_outline", course_title="Course X"),
+            call("search_course_content", query="Python Basics")
+        ])
+        
+        # Verify final response
+        assert response == "Course Y covers the same topic as Lesson 4 of Course X."
+        
+        # Verify 3 API calls were made (2 tool rounds + 1 final)
+        assert mock_ai_generator.client.messages.create.call_count == 3
+
+    def test_sequential_tool_calling_terminates_on_non_tool_response(self, mock_ai_generator, course_search_tool):
+        """Test that sequential calling terminates when Claude doesn't use tools"""
+        tool_manager = ToolManager()
+        tool_manager.register_tool(course_search_tool)
+        tool_manager.execute_tool = Mock(return_value="Search results")
+        
+        # Configure mock to use tool once, then provide final response
+        call_count = 0
+        def mock_create(**kwargs):
+            nonlocal call_count
+            call_count += 1
+            mock_response = Mock()
+            
+            if call_count == 1:
+                # First round - use tool
+                mock_response.stop_reason = "tool_use"
+                mock_content_block = Mock()
+                mock_content_block.type = "tool_use"
+                mock_content_block.name = "search_course_content"
+                mock_content_block.input = {"query": "test"}
+                mock_content_block.id = "tool_use_1"
+                mock_response.content = [mock_content_block]
+            else:
+                # Second round - final response without tools
+                mock_response.stop_reason = "end_turn"
+                mock_text_block = Mock()
+                mock_text_block.text = "Here's the answer based on the search."
+                mock_response.content = [mock_text_block]
+            return mock_response
+        
+        mock_ai_generator.client.messages.create.side_effect = mock_create
+        
+        response = mock_ai_generator.generate_response(
+            query="Test query",
+            tools=tool_manager.get_tool_definitions(),
+            tool_manager=tool_manager
+        )
+        
+        # Verify only one tool execution
+        assert tool_manager.execute_tool.call_count == 1
+        
+        # Verify final response
+        assert response == "Here's the answer based on the search."
+        
+        # Verify only 2 API calls (tool use + final response)
+        assert mock_ai_generator.client.messages.create.call_count == 2
+
+    def test_sequential_tool_calling_max_rounds_reached(self, mock_ai_generator, course_search_tool):
+        """Test behavior when max rounds is reached"""
+        tool_manager = ToolManager()
+        tool_manager.register_tool(course_search_tool)
+        tool_manager.execute_tool = Mock(return_value="Search results")
+        
+        # Configure mock to always return tool use responses
+        def mock_create(**kwargs):
+            mock_response = Mock()
+            if "tools" in kwargs:
+                # Tool use response
+                mock_response.stop_reason = "tool_use"
+                mock_content_block = Mock()
+                mock_content_block.type = "tool_use"
+                mock_content_block.name = "search_course_content"
+                mock_content_block.input = {"query": "test"}
+                mock_content_block.id = "tool_use_1"
+                mock_response.content = [mock_content_block]
+            else:
+                # Final response without tools
+                mock_response.stop_reason = "end_turn"
+                mock_text_block = Mock()
+                mock_text_block.text = "Final response after max rounds."
+                mock_response.content = [mock_text_block]
+            return mock_response
+        
+        mock_ai_generator.client.messages.create.side_effect = mock_create
+        
+        response = mock_ai_generator.generate_response(
+            query="Test query",
+            tools=tool_manager.get_tool_definitions(),
+            tool_manager=tool_manager,
+            max_rounds=2
+        )
+        
+        # Verify tool was executed twice (max rounds)
+        assert tool_manager.execute_tool.call_count == 2
+        
+        # Verify final response
+        assert response == "Final response after max rounds."
+        
+        # Verify 3 API calls (2 tool rounds + 1 final without tools)
+        assert mock_ai_generator.client.messages.create.call_count == 3
+
+    def test_sequential_tool_calling_tool_execution_failure(self, mock_ai_generator, course_search_tool):
+        """Test behavior when tool execution fails in sequential calling"""
+        tool_manager = ToolManager()
+        tool_manager.register_tool(course_search_tool)
+        
+        # Mock tool manager to raise exception
+        tool_manager.execute_tool = Mock(side_effect=Exception("Tool execution failed"))
+        
+        # Configure mock to return tool use
+        def mock_create(**kwargs):
+            mock_response = Mock()
+            mock_response.stop_reason = "tool_use"
+            mock_content_block = Mock()
+            mock_content_block.type = "tool_use"
+            mock_content_block.name = "search_course_content"
+            mock_content_block.input = {"query": "test"}
+            mock_content_block.id = "tool_use_1"
+            mock_response.content = [mock_content_block]
+            return mock_response
+        
+        mock_ai_generator.client.messages.create.side_effect = mock_create
+        
+        response = mock_ai_generator.generate_response(
+            query="Test query",
+            tools=tool_manager.get_tool_definitions(),
+            tool_manager=tool_manager
+        )
+        
+        # Verify tool execution was attempted
+        assert tool_manager.execute_tool.call_count == 1
+        
+        # Verify error response
+        assert response == "I encountered an error while executing the requested tools."
+        
+        # Verify only 1 API call (failed on first tool round)
+        assert mock_ai_generator.client.messages.create.call_count == 1
+
+    def test_sequential_tool_calling_conversation_context_preserved(self, mock_ai_generator, course_search_tool):
+        """Test that conversation context is preserved across sequential rounds"""
+        tool_manager = ToolManager()
+        tool_manager.register_tool(course_search_tool)
+        tool_manager.execute_tool = Mock(return_value="Search results")
+        
+        conversation_history = "User: Previous question\nAI: Previous answer"
+        
+        # Track the actual API calls to verify message structure
+        api_calls = []
+        
+        def capture_create(**kwargs):
+            api_calls.append(kwargs)
+            mock_response = Mock()
+            
+            if len(api_calls) == 1:
+                # First call - return tool use
+                mock_response.stop_reason = "tool_use"
+                mock_content_block = Mock()
+                mock_content_block.type = "tool_use"
+                mock_content_block.name = "search_course_content"
+                mock_content_block.input = {"query": "test"}
+                mock_content_block.id = "tool_123"
+                mock_response.content = [mock_content_block]
+            else:
+                # Subsequent calls - final response
+                mock_response.stop_reason = "end_turn"
+                mock_text_block = Mock()
+                mock_text_block.text = "Final response"
+                mock_response.content = [mock_text_block]
+            
+            return mock_response
+        
+        mock_ai_generator.client.messages.create.side_effect = capture_create
+        
+        response = mock_ai_generator.generate_response(
+            query="Test query",
+            conversation_history=conversation_history,
+            tools=tool_manager.get_tool_definitions(),
+            tool_manager=tool_manager
+        )
+        
+        # Verify conversation history was included in both calls
+        for call_args in api_calls:
+            expected_system = f"{mock_ai_generator.SYSTEM_PROMPT}\n\nPrevious conversation:\n{conversation_history}"
+            assert call_args["system"] == expected_system
+        
+        # Verify we had exactly 2 API calls (tool use + final response)  
+        assert len(api_calls) == 2
+        
+        # The sequential implementation accumulates messages across rounds
+        # Both calls should preserve conversation context
+        assert len(api_calls[0]["messages"]) >= 1  # At least the initial message
+        assert len(api_calls[1]["messages"]) >= 3  # Initial + assistant tool use + tool result
+
+    def test_max_rounds_parameter_customization(self, mock_ai_generator, course_search_tool):
+        """Test that max_rounds parameter can be customized"""
+        tool_manager = ToolManager()
+        tool_manager.register_tool(course_search_tool)
+        tool_manager.execute_tool = Mock(return_value="Search results")
+        
+        # Configure mock to always return tool use responses
+        def mock_create(**kwargs):
+            mock_response = Mock()
+            if "tools" in kwargs:
+                mock_response.stop_reason = "tool_use"
+                mock_content_block = Mock()
+                mock_content_block.type = "tool_use"
+                mock_content_block.name = "search_course_content"
+                mock_content_block.input = {"query": "test"}
+                mock_content_block.id = "tool_use_1"
+                mock_response.content = [mock_content_block]
+            else:
+                mock_response.stop_reason = "end_turn"
+                mock_text_block = Mock()
+                mock_text_block.text = "Final response"
+                mock_response.content = [mock_text_block]
+            return mock_response
+        
+        mock_ai_generator.client.messages.create.side_effect = mock_create
+        
+        # Test with max_rounds=1
+        response = mock_ai_generator.generate_response(
+            query="Test query",
+            tools=tool_manager.get_tool_definitions(),
+            tool_manager=tool_manager,
+            max_rounds=1
+        )
+        
+        # Verify only one tool execution
+        assert tool_manager.execute_tool.call_count == 1
+        
+        # Verify 2 API calls (1 tool round + 1 final)
+        assert mock_ai_generator.client.messages.create.call_count == 2
